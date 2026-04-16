@@ -449,64 +449,426 @@ async def extract_real_video_url(page: Page, video_page_url: str) -> dict | None
 
 async def extract_long_article(page: Page, article_url: str) -> dict | None:
     """
-    提取长文章内容 - Playwright 版本
+    抓取长文章的完整内容和图片 - Playwright 版本
+    返回包含 title, content, images 等字段的字典。
+    图片和图片说明会被正确提取并配对。
     """
     article_page = await page.context.new_page()
     
     try:
         await article_page.goto(article_url, wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(1)
+        await asyncio.sleep(3)
         
+        # 主脚本：提取标题、内容和图片（包括图片说明）
         script = """() => {
-            const result = {
-                title: '',
-                author: '',
-                publish_time: '',
-                content: '',
-                images: []
-            };
-            
-            // 提取标题
-            const titleEl = document.querySelector('h1, .title, [class*="title"]');
-            if (titleEl) result.title = titleEl.textContent.trim();
-            
-            // 提取作者
-            const authorEl = document.querySelector('[class*="author"], [class*="user"]');
-            if (authorEl) result.author = authorEl.textContent.trim();
-            
-            // 提取时间
-            const timeEl = document.querySelector('time, [class*="time"], [class*="date"]');
-            if (timeEl) result.publish_time = timeEl.textContent.trim();
-            
-            // 提取正文内容
-            const contentEl = document.querySelector('article, [class*="content"], [class*="article-body"]');
-            if (contentEl) {
-                result.content = contentEl.innerText.trim();
-                
-                // 提取图片
-                const imgs = contentEl.querySelectorAll('img');
-                imgs.forEach(img => {
-                    const src = img.src || img.getAttribute('data-src');
-                    if (src && src.startsWith('http')) {
-                        result.images.push(src);
+            try {
+                // 尝试多种方式提取文章标题
+                var title = '';
+                // 1. 尝试从 h1 标签获取
+                var h1 = document.querySelector('h1');
+                if (h1 && h1.innerText && h1.innerText.trim()) {
+                    title = h1.innerText.trim();
+                }
+                // 2. 尝试从特定 class 的元素获取（微博长文章常见标题 class）
+                if (!title) {
+                    var titleSelectors = [
+                        '[class*="title"]',
+                        '[class*="Title"]',
+                        '[class*="article-title"]',
+                        '[class*="article_title"]',
+                        '[class*="headline"]',
+                        '.main-content h2',
+                        '.article-content h2'
+                    ];
+                    for (var i = 0; i < titleSelectors.length; i++) {
+                        var el = document.querySelector(titleSelectors[i]);
+                        if (el && el.innerText && el.innerText.trim() && el.innerText.trim().length < 200) {
+                            title = el.innerText.trim();
+                            break;
+                        }
                     }
-                });
+                }
+                // 3. 回退到 document.title
+                if (!title) {
+                    title = document.title || '';
+                }
+                // 清理标题（移除 "- 微博" 等后缀）
+                title = title.replace(/\\s*[-|]\\s*微博.*$/i, '').trim();
+
+                // 查找文章主体内容区域
+                var rootCandidates = Array.from(document.querySelectorAll('.WB_editor_iframe_new, article, [class*="article"], [class*="content"], [class*="text"], main'))
+                    .filter(function(el) { return el && el.innerText && (el.innerText || '').length > 200; });
+                var root = rootCandidates.sort(function(a, b) { return ((b.innerText || '').length - (a.innerText || '').length); })[0] || document.body;
+
+                var images = [];
+                var processedUrls = {};
+                var imageIndex = 0;
+
+                // 检查是否为有效图片
+                var isValidImage = function(img) {
+                    if (!img) return false;
+                    var url = img.src || img.getAttribute('data-src') || '';
+                    if (!url || url.indexOf('http') !== 0) return false;
+                    if (url.indexOf('sinaimg.cn') === -1) return false;
+
+                    var parent = img.parentElement;
+                    var depth = 0;
+                    var parentChain = '';
+                    while (parent && depth < 5) {
+                        var className = parent.className || '';
+                        parentChain += ' ' + className;
+                        if (/avatar|head|icon|logo/i.test(className)) return false;
+                        parent = parent.parentElement;
+                        depth++;
+                    }
+                    if (/woo-avatar|user-info|author-info|icon-main/i.test(parentChain)) return false;
+
+                    var width = img.naturalWidth || img.width || 0;
+                    var height = img.naturalHeight || img.height || 0;
+                    if (width > 0 && height > 0 && (width < 100 || height < 100)) return false;
+                    return true;
+                };
+
+                // 检查段落是否为图片说明（以▲开头或包含"图 /"）
+                var isImageCaption = function(text) {
+                    if (!text) return false;
+                    text = text.trim();
+                    return text.indexOf('▲') === 0 || text.indexOf('图 /') >= 0 || text.indexOf('图/') >= 0;
+                };
+
+                // 提取图片说明文本
+                var extractCaption = function(text) {
+                    if (!text) return '';
+                    text = text.trim();
+                    // 移除开头的▲符号
+                    if (text.indexOf('▲') === 0) {
+                        text = text.substring(1).trim();
+                    }
+                    return text;
+                };
+
+                // 序列化节点，提取图片和图片说明
+                var serializeNode = function(node) {
+                    if (!node) return '';
+                    if (node.nodeType === 3) { // Node.TEXT_NODE
+                        return node.nodeValue || '';
+                    }
+                    if (node.nodeType !== 1) return ''; // Node.ELEMENT_NODE
+
+                    var tag = node.tagName.toLowerCase();
+                    
+                    // 处理图片
+                    if (tag === 'img') {
+                        var url = node.src || node.getAttribute('data-src') || '';
+                        if (!isValidImage(node) || processedUrls[url]) return '';
+                        processedUrls[url] = true;
+                        var width = node.naturalWidth || node.width || 300;
+                        var height = node.naturalHeight || node.height || 300;
+                        imageIndex++;
+                        var placeholder = '__WEIBO_IMG_' + imageIndex + '__';
+                        
+                        // 查找图片说明（下一个兄弟节点）
+                        var caption = '';
+                        var nextSibling = node.parentElement ? node.parentElement.nextElementSibling : null;
+                        
+                        // 如果父元素是figure，查找figure的下一个兄弟节点
+                        if (node.parentElement && node.parentElement.tagName.toLowerCase() === 'figure') {
+                            nextSibling = node.parentElement.nextElementSibling;
+                        }
+                        
+                        // 检查下一个节点是否为图片说明
+                        if (nextSibling && nextSibling.tagName.toLowerCase() === 'p') {
+                            var nextText = (nextSibling.innerText || '').trim();
+                            if (isImageCaption(nextText)) {
+                                caption = extractCaption(nextText);
+                                // 标记这个段落已被处理为图片说明
+                                nextSibling.setAttribute('data-is-caption', 'true');
+                            }
+                        }
+                        
+                        images.push({ 
+                            url: url, 
+                            width: width, 
+                            height: height, 
+                            placeholder: placeholder,
+                            caption: caption
+                        });
+                        return '\\n' + placeholder + '\\n';
+                    }
+
+                    if (tag === 'script' || tag === 'style' || tag === 'noscript') return '';
+
+                    // 处理段落
+                    if (tag === 'p') {
+                        // 检查是否已被标记为图片说明
+                        if (node.getAttribute && node.getAttribute('data-is-caption') === 'true') {
+                            return ''; // 跳过，已经在图片处理时提取了
+                        }
+                        
+                        // 检查段落内容是否为图片说明
+                        var pText = (node.innerText || '').trim();
+                        if (isImageCaption(pText)) {
+                            // 检查前一个兄弟节点是否为图片
+                            var prevSibling = node.previousElementSibling;
+                            if (prevSibling) {
+                                // 如果前一个节点是figure，说明这个说明已经被处理了
+                                if (prevSibling.tagName.toLowerCase() === 'figure') {
+                                    return ''; // 跳过，已经在图片处理时提取了
+                                }
+                                // 检查figure内是否有图片
+                                var prevImg = prevSibling.querySelector('img');
+                                if (prevImg && isValidImage(prevImg)) {
+                                    return ''; // 跳过，已经在图片处理时提取了
+                                }
+                            }
+                        }
+                    }
+
+                    var children = '';
+                    for (var i = 0; i < node.childNodes.length; i++) {
+                        children += serializeNode(node.childNodes[i]);
+                    }
+                    if (tag === 'br') return '\\n';
+                    if (tag === 'p' || tag === 'div' || tag === 'section' || tag === 'article' || tag === 'li') return children + '\\n';
+                    return children;
+                };
+
+                var content = serializeNode(root)
+                    .replace(/\\n{3,}/g, '\\n\\n')
+                    .replace(/[ \\t]+\\n/g, '\\n')
+                    .trim();
+
+                if (content.length < 200) {
+                    content = (document.body.innerText || '').trim();
+                }
+
+                var dateMatch = content.match(/(\\d{4}-\\d{2}-\\d{2})/);
+                var publishDate = dateMatch ? dateMatch[1] : '';
+
+                return {
+                    title: title,
+                    content: content,
+                    images: images,
+                    publish_date: publishDate,
+                    url: window.location.href
+                };
+            } catch (e) {
+                return { error: e.toString() };
             }
-            
-            return result;
         }"""
         
         article_data = await article_page.evaluate(script)
         
-        if article_data and article_data.get('content'):
-            return article_data
-            
+        # 检查是否有错误
+        if article_data and isinstance(article_data, dict):
+            if article_data.get("error"):
+                print(f"提取长文章时 JavaScript 错误: {article_data.get('error')}")
+                # 尝试备用方案
+                return await extract_long_article_simple(article_page, article_url)
+            if article_data.get("content"):
+                await article_page.close()
+                return article_data
+        
+        await article_page.close()
+        return None
+        
     except Exception as e:
         print(f"提取长文章失败: {article_url} -> {e}")
-    finally:
-        await article_page.close()
-    
-    return None
+        # 确保在异常情况下也关闭页面
+        try:
+            await article_page.close()
+        except:
+            pass
+        return None
+
+
+async def extract_long_article_simple(page: Page, article_url: str) -> dict | None:
+    """
+    使用更简单的 JavaScript 提取长文章（备用方案）- Playwright 版本
+    也支持提取图片说明，并在正确位置插入图片占位符。
+    """
+    try:
+        # 备用脚本：使用更简单的 ES5 语法
+        script = """() => {
+            try {
+                // 提取标题
+                var title = '';
+                var h1 = document.querySelector('h1');
+                if (h1 && h1.innerText) {
+                    title = h1.innerText.trim();
+                }
+                if (!title) {
+                    title = document.title || '';
+                }
+                title = title.replace(/\\s*[-|]\\s*微博.*$/i, '').trim();
+
+                // 检查段落是否为图片说明
+                var isImageCaption = function(text) {
+                    if (!text) return false;
+                    text = text.trim();
+                    return text.indexOf('▲') === 0 || text.indexOf('图 /') >= 0 || text.indexOf('图/') >= 0;
+                };
+
+                // 提取图片说明文本
+                var extractCaption = function(text) {
+                    if (!text) return '';
+                    text = text.trim();
+                    if (text.indexOf('▲') === 0) {
+                        text = text.substring(1).trim();
+                    }
+                    return text;
+                };
+
+                // 查找文章主体内容区域
+                var rootCandidates = Array.from(document.querySelectorAll('.WB_editor_iframe_new, article, [class*="article"], [class*="content"], main'))
+                    .filter(function(el) { return el && el.innerText && (el.innerText || '').length > 200; });
+                var root = rootCandidates.sort(function(a, b) { return ((b.innerText || '').length - (a.innerText || '').length); })[0] || document.body;
+
+                // 提取图片（包括图片说明）
+                var images = [];
+                var imageIndex = 0;
+                var processedUrls = {};
+                var imagePlaceholders = {}; // 用于记录图片URL到占位符的映射
+                
+                // 首先提取所有图片
+                var imgElements = root.querySelectorAll('img');
+                for (var i = 0; i < imgElements.length; i++) {
+                    var img = imgElements[i];
+                    var url = img.src || img.getAttribute('data-src') || '';
+                    if (!url || url.indexOf('http') !== 0) continue;
+                    if (url.indexOf('sinaimg.cn') === -1) continue;
+                    if (processedUrls[url]) continue;
+                    
+                    // 检查尺寸
+                    var width = img.naturalWidth || img.width || 0;
+                    var height = img.naturalHeight || img.height || 0;
+                    if (width > 0 && height > 0 && (width < 100 || height < 100)) continue;
+                    
+                    processedUrls[url] = true;
+                    imageIndex++;
+                    var placeholder = '__WEIBO_IMG_' + imageIndex + '__';
+                    imagePlaceholders[url] = placeholder;
+                    
+                    // 查找图片说明
+                    var caption = '';
+                    var parent = img.parentElement;
+                    var nextSibling = null;
+                    
+                    // 如果父元素是figure，查找figure的下一个兄弟节点
+                    if (parent && parent.tagName.toLowerCase() === 'figure') {
+                        nextSibling = parent.nextElementSibling;
+                    } else if (parent) {
+                        nextSibling = parent.nextElementSibling;
+                    }
+                    
+                    // 检查下一个节点是否为图片说明
+                    if (nextSibling && nextSibling.tagName.toLowerCase() === 'p') {
+                        var nextText = (nextSibling.innerText || '').trim();
+                        if (isImageCaption(nextText)) {
+                            caption = extractCaption(nextText);
+                        }
+                    }
+                    
+                    images.push({ 
+                        url: url, 
+                        width: width || 300, 
+                        height: height || 300, 
+                        placeholder: placeholder,
+                        caption: caption
+                    });
+                }
+
+                // 序列化节点，在图片位置插入占位符
+                var serializeNode = function(node) {
+                    if (!node) return '';
+                    if (node.nodeType === 3) { // Node.TEXT_NODE
+                        return node.nodeValue || '';
+                    }
+                    if (node.nodeType !== 1) return ''; // Node.ELEMENT_NODE
+
+                    var tag = node.tagName.toLowerCase();
+                    
+                    // 处理图片
+                    if (tag === 'img') {
+                        var url = node.src || node.getAttribute('data-src') || '';
+                        if (url && imagePlaceholders[url]) {
+                            return '\\n' + imagePlaceholders[url] + '\\n';
+                        }
+                        return '';
+                    }
+
+                    if (tag === 'script' || tag === 'style' || tag === 'noscript') return '';
+
+                    // 处理段落
+                    if (tag === 'p') {
+                        var pText = (node.innerText || '').trim();
+                        // 检查是否为图片说明
+                        if (isImageCaption(pText)) {
+                            // 检查前一个兄弟节点是否为图片
+                            var prevSibling = node.previousElementSibling;
+                            if (prevSibling) {
+                                // 如果前一个节点是figure，说明这个说明已经被处理了
+                                if (prevSibling.tagName.toLowerCase() === 'figure') {
+                                    return ''; // 跳过，已经在图片处理时提取了
+                                }
+                                // 检查figure内是否有图片
+                                var prevImg = prevSibling.querySelector('img');
+                                if (prevImg && prevImg.src && imagePlaceholders[prevImg.src]) {
+                                    return ''; // 跳过，已经在图片处理时提取了
+                                }
+                            }
+                        }
+                    }
+
+                    var children = '';
+                    for (var i = 0; i < node.childNodes.length; i++) {
+                        children += serializeNode(node.childNodes[i]);
+                    }
+                    if (tag === 'br') return '\\n';
+                    if (tag === 'p' || tag === 'div' || tag === 'section' || tag === 'article' || tag === 'li') return children + '\\n';
+                    return children;
+                };
+
+                var content = serializeNode(root)
+                    .replace(/\\n{3,}/g, '\\n\\n')
+                    .replace(/[ \\t]+\\n/g, '\\n')
+                    .trim();
+
+                if (content.length < 200) {
+                    content = (document.body.innerText || '').trim();
+                }
+
+                // 提取日期
+                var dateMatch = content.match(/(\\d{4}-\\d{2}-\\d{2})/);
+                var publishDate = dateMatch ? dateMatch[1] : '';
+
+                return {
+                    title: title,
+                    content: content,
+                    images: images,
+                    publish_date: publishDate,
+                    url: window.location.href
+                };
+            } catch (e) {
+                return { error: e.toString() };
+            }
+        }"""
+        
+        article_data = await page.evaluate(script)
+        
+        if article_data and isinstance(article_data, dict):
+            if article_data.get("error"):
+                print(f"备用方案提取长文章时 JavaScript 错误: {article_data.get('error')}")
+                return None
+            if article_data.get("content"):
+                print(f"使用备用方案成功提取长文章")
+                return article_data
+        
+        return None
+        
+    except Exception as e:
+        print(f"备用方案提取长文章失败: {e}")
+        return None
 
 
 async def scroll_and_extract(
@@ -1325,40 +1687,82 @@ async def download_record(
                 else:
                     print(f"  ✗ 视频下载失败")
     
-    # 下载长文章（使用与markdown一致的命名）
-    if download_article and record["long_article_url"]:
-        print(f"\n提取长文章: {record_id}")
-        article_data = await extract_long_article(page, record["long_article_url"])
-        
-        if article_data:
-            # 保存文章，使用与主markdown一致的命名前缀
-            article_title = sanitize_name(article_data.get('title', 'article')[:50])
-            article_file_prefix = f"{file_prefix}_article_{article_title}"
-            article_md_name = f"{article_file_prefix}.md"
-            article_md = ARTICLES_DIR / article_md_name
-            article_md.parent.mkdir(parents=True, exist_ok=True)
+    # 处理长文章
+    long_article_md_name = None
+    long_article_title = None
+    if record.get("long_article_url"):
+        if download_article:
+            print(f"\n提取长文章: {record_id}")
+            article_data = await extract_long_article(page, record["long_article_url"])
             
-            # 构建Markdown内容
-            md_content = f"# {article_data.get('title', record_id)}\n\n"
-            md_content += f"**作者**: {article_data.get('author', record['author'])}\n\n"
-            md_content += f"**时间**: {article_data.get('publish_time', record['publish_time'])}\n\n"
-            md_content += f"**原文链接**: {record['long_article_url']}\n\n"
-            md_content += "---------\n\n"
-            md_content += "## 正文\n\n"
-            md_content += article_data.get('content', '')
-            
-            article_md.write_text(md_content, encoding='utf-8')
-            print(f"  ✓ 文章已保存: {article_md.name}")
-            
-            # 下载文章图片（使用与文章markdown一致的命名）
-            if article_data.get('images'):
-                for idx, img_url in enumerate(article_data['images']):
-                    # 使用与文章markdown一致的命名: prefix_article_img_序号.扩展名
-                    img_name = f"{article_file_prefix}_img_{idx + 1:03d}{image_extension(img_url)}"
+            if article_data:
+                # 保存文章，使用与主markdown一致的命名前缀
+                article_title = sanitize_name(article_data.get('title', 'article')[:50])
+                article_file_prefix = f"{file_prefix}_article_{article_title}"
+                article_md_name = f"{article_file_prefix}.md"
+                article_md = ARTICLES_DIR / article_md_name
+                article_md.parent.mkdir(parents=True, exist_ok=True)
+                
+                # 下载文章中的图片，并记录原始 URL 到本地文件的映射
+                image_url_map = {}
+                downloaded_urls = set()
+                
+                for img_idx, img_info in enumerate(article_data.get("images", []), start=1):
+                    original_url = img_info.get("url", "")
+                    if not original_url or original_url in downloaded_urls:
+                        continue
+                    
+                    downloaded_urls.add(original_url)
+                    img_url = convert_image_size(original_url, image_size)
+                    
+                    # 命名规则: prefix_article_img_序号.扩展名
+                    img_name = f"{article_file_prefix}_img_{img_idx:03d}{image_extension(img_url)}"
                     img_path = ARTICLE_PICTURES_DIR / img_name
                     
-                    if not img_path.exists():
-                        await download_image_with_context(context, img_url, img_path, user_agent=user_agent)
+                    try:
+                        success = await download_image_with_context(context, img_url, img_path, user_agent=user_agent)
+                        if success:
+                            # 长文章Markdown文件在 articles/ 目录下，图片在 articles/pictures/ 目录下
+                            # 所以相对路径应该是 pictures/ 而不是 articles/pictures/
+                            image_url_map[original_url] = f"pictures/{img_name}"
+                    except Exception as e:
+                        print(f"  长文章图片下载失败: {original_url} -> {e}")
+                
+                # 将正文中的图片占位符替换为本地图片链接和图片说明
+                rendered_content = article_data.get('content', '')
+                for img_info in article_data.get("images", []):
+                    original_url = img_info.get("url", "")
+                    placeholder = img_info.get("placeholder", "")
+                    local_path = image_url_map.get(original_url, "")
+                    caption = img_info.get("caption", "")
+                    
+                    if placeholder and local_path:
+                        # 构建图片标签
+                        img_tag = f'<img src="{local_path}" width="{img_info.get("width", 300)}" height="{img_info.get("height", 300)}">'
+                        
+                        # 如果有图片说明，添加到图片下方
+                        if caption:
+                            img_with_caption = f'{img_tag}\n\n*{caption}*'
+                        else:
+                            img_with_caption = img_tag
+                        
+                        rendered_content = rendered_content.replace(placeholder, img_with_caption)
+                
+                # 构建Markdown内容
+                md_content = f"# {article_data.get('title', record_id)}\n\n"
+                md_content += f"**作者**: {article_data.get('author', record['author'])}\n\n"
+                md_content += f"**发布时间**: {article_data.get('publish_date', record['publish_time'])}\n\n"
+                md_content += f"**原文链接**: {record['long_article_url']}\n\n"
+                md_content += "---------\n\n"
+                md_content += "## 正文\n\n"
+                md_content += rendered_content
+                
+                article_md.write_text(md_content, encoding='utf-8')
+                print(f"  ✓ 文章已保存: {article_md.name}")
+                
+                # 记录长文章信息，用于主markdown中的链接
+                long_article_md_name = article_md_name
+                long_article_title = article_data.get('title', '长文章')
     
     # 创建 Markdown 文件（file_prefix 已在前面定义）
     md_name = f"{file_prefix}.md"
@@ -1388,21 +1792,26 @@ async def download_record(
             lines.append("".join(img_tags))
             lines.append("")
     
-    # 添加视频链接（使用新的命名格式）
+    # 添加视频链接
     video_files = []
-    if download_video and record.get("video_urls"):
-        # 检查视频目录中是否存在对应的视频文件（使用新的命名格式）
-        ext = ".mp4"  # 默认扩展名
-        video_name = f"{file_prefix}_video{ext}"
-        video_path = VIDEOS_DIR / video_name
-        if video_path.exists():
-            video_files.append({"name": video_name, "path": f"videos/{video_name}"})
+    video_urls = record.get("video_urls", [])
     
-    if video_files:
+    if video_urls:
+        # 如果启用了视频下载，检查本地视频文件
+        if download_video:
+            ext = ".mp4"  # 默认扩展名
+            video_name = f"{file_prefix}_video{ext}"
+            video_path = VIDEOS_DIR / video_name
+            if video_path.exists():
+                video_files.append({"name": video_name, "path": f"videos/{video_name}", "is_local": True})
+        
+        # 添加视频部分到Markdown
         lines.append("")
         lines.append("---------")
         lines.append("## 视频")
         lines.append("")
+        
+        # 如果有本地视频文件，添加播放器
         for video in video_files:
             lines.append(f"**视频文件**: [{video['name']}]({video['path']})")
             lines.append("")
@@ -1412,6 +1821,14 @@ async def download_record(
             lines.append(f'  您的浏览器不支持视频播放')
             lines.append(f'</video>')
             lines.append("")
+        
+        # 添加源视频链接（无论是否下载了视频）
+        if video_urls:
+            lines.append("**源视频链接**:")
+            lines.append("")
+            for idx, video_url in enumerate(video_urls, 1):
+                lines.append(f"{idx}. [{video_url}]({video_url})")
+            lines.append("")
     
     # 添加长文章链接
     if record.get("long_article_url"):
@@ -1419,7 +1836,15 @@ async def download_record(
         lines.append("---------")
         lines.append("## 长文章")
         lines.append("")
-        lines.append(f"**长文章链接**: [点击查看完整文章]({record['long_article_url']})")
+        if long_article_md_name:
+            # 如果成功下载了长文章，链接到本地文件
+            article_link_text = long_article_title if long_article_title else "点击查看完整文章"
+            lines.append(f"**长文章链接**: [{article_link_text}](articles/{long_article_md_name})")
+            lines.append("")
+            lines.append(f"**原文链接**: {record['long_article_url']}")
+        else:
+            # 如果没有下载长文章，直接链接到原文
+            lines.append(f"**长文章链接**: [点击查看完整文章]({record['long_article_url']})")
     
     # 添加双向导航链接
     # 注意：下一条链接会在处理下一条记录时通过更新当前文件来添加

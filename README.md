@@ -18,8 +18,12 @@
    pip install playwright
    playwright install chromium
    ```
-## 通过Agent Skill 运行 (推荐)
- 把项目clone到本地, 把weibo-downloader 目录复制到agent skills目录下， 如 .opencode/skills 或 .claude/skills/目录下
+## 通过Agent Skill 运行 
+- 自动安装Skill (推荐)
+npx skills add https://www.modelscope.cn/skills/hhjinhh/weibo-downloader
+
+- 手动安装Skill 
+  把项目clone到本地, 把weibo-downloader 目录复制到agent skills目录下， 如 .opencode/skills 或 .claude/skills/目录下
 
 ## 手动运行脚本 
 
@@ -32,6 +36,7 @@
 ```bash
 python weibo_favorites_4skill.py
 ```
+注： 不提供output-dir参数，默认输出到python脚本所在目录下的output目录。
 
 ### 日常使用（推荐配置，推荐给用户后续的日常使用，headless 模式，下载600条记录包括高清图片，视频，长文章， 跳过已存在的记录）
 首次使用后，后续运行时不用登录微博，直接从第一次运行生成的cookies.json文件中读取登录状态。
@@ -55,18 +60,18 @@ python weibo_favorites_4skill.py \
 
 ## 参数说明
 
-| 参数                   | 说明                             | 默认值                                  |
-| ---------------------- | -------------------------------- | --------------------------------------- |
-| `--url`              | 目标微博收藏页面URL               | https://weibo.com                       |
-| `--max-download`     | 最大下载数量                     | 10                                      |
-| `--skip-existing`    | 跳过已存在的记录                  | False                                   |
-| `--image-size`       | 图片尺寸：360/480/690/2000/large | 360                                     |
-| `--download-video`   | 下载视频                         | 开关参数，不需要指定值，无此参数则不下载视频   |
-| `--download-article` | 下载长文章                       | 开关参数，不需要指定值，无此参数则不下载长文章  |
-| `--batch-size`       | 分批次每次下载记录数               | 20                                      |
-| `--headless`         | 无头模式（不显示浏览器）            | 开关参数，不需要指定值，无此参数则显示浏览器窗口|
-| `--user-data-dir`    | 浏览器用户数据目录                 | 无此参数默认使用 cookies.json             |
-| `--output-dir`       | 自定义输出目录                    | python脚本所在目录下的output目录           |
+| 参数                  | 说明                           | 默认值                                      |
+| ------------------ - | ------------------------------ | ---------------------------------------    |
+| `--url`              | 目标微博用户主页或收藏页面URL      | https://weibo.com                          |
+| `--max-download`     | 最大下载数量                     | 10                                         |
+| `--skip-existing`    | 跳过已存在的记录                  | False                                      |
+| `--image-size`       | 图片尺寸：360/480/690/2000/large | 360                                        |
+| `--download-video`   | 下载视频到本地                    | 开关参数，不需要指定值，无此参数则只保留视频链接   |
+| `--download-article` | 下载长文章到本地                  | 开关参数，不需要指定值，无此参数则只保留文章链接   |
+| `--batch-size`       | 分批次每次下载记录数               | 20                                         |
+| `--headless`         | 无头模式（不显示浏览器）            | 开关参数，不需要指定值，无此参数则显示浏览器窗口   |
+| `--user-data-dir`    | 浏览器用户数据目录                 | 无此参数默认使用 cookies.json                 |
+| `--output-dir`       | 自定义输出目录                    | python脚本所在目录下的output目录               |
 
 ## 输出目录结构
 
