@@ -68,6 +68,212 @@ _existing_record_ids: set[str] = set()
 _existing_article_ids: set[str] = set()
 _existing_article_md_map: dict[str, Path] = {}
 
+# 记录链信息
+_record_chain_info: dict | None = None  # 存储链的头部和尾部记录信息
+
+
+def find_record_chain_tail() -> dict | None:
+    """
+    扫描所有已存在的 markdown 文件，找到记录链的尾部记录。
+    通过解析双向链接中的 "下一条" 链接来追踪链的结尾。
+    返回尾部记录的信息字典，如果没有找到则返回 None。
+    """
+    if not OUTPUT_DIR.exists():
+        return None
+    
+    # 获取所有 markdown 文件
+    md_files = list(OUTPUT_DIR.glob("*.md"))
+    if not md_files:
+        return None
+    
+    # 构建记录ID到文件信息的映射
+    # 文件名格式: author_date_time_recordid.md (如: 爱可可-爱生活_2026-04-12_0832_QApYcsCLc.md)
+    record_map: dict[str, dict] = {}
+    for md_file in md_files:
+        record_id = md_file.stem
+        # 从文件名提取 record_id: 最后一部分是 record_id
+        parts = record_id.rsplit('_', 1)
+        if len(parts) == 2:
+            rid = parts[1]  # record_id (如 QApYcsCLc)
+            prefix = parts[0]  # author_date_time (如 爱可可-爱生活_2026-04-12_0832)
+            # 验证 record_id 格式（字母数字组合，通常8位左右）
+            if rid and len(rid) >= 6:
+                # 从 prefix 中提取作者和时间信息（简化处理）
+                # 假设最后两部分是日期和时间
+                prefix_parts = prefix.rsplit('_', 2)
+                if len(prefix_parts) >= 3:
+                    author = '_'.join(prefix_parts[:-2])  # 作者名（可能包含下划线）
+                    date_str = prefix_parts[-2]
+                    time_str = prefix_parts[-1]
+                    timestamp = f"{date_str}_{time_str}"
+                else:
+                    author = prefix
+                    timestamp = ""
+                
+                record_map[rid] = {
+                    "record_id": rid,
+                    "file_name": md_file.name,
+                    "file_path": md_file,
+                    "author": author,
+                    "timestamp": timestamp,
+                    "full_id": record_id,
+                }
+    
+    if not record_map:
+        return None
+    
+    # 解析每个文件的导航链接，构建链接关系图
+    # next_links: record_id -> next_record_id
+    # prev_links: record_id -> prev_record_id
+    next_links: dict[str, str] = {}
+    prev_links: dict[str, str] = {}
+    
+    for rid, info in record_map.items():
+        try:
+            content = info["file_path"].read_text(encoding="utf-8")
+            lines = content.split("\n")
+            
+            # 查找导航链接行（在 ## 正文 之前的行）
+            for i, line in enumerate(lines):
+                if line == "## 正文":
+                    # 往前查找导航链接
+                    for j in range(i - 1, -1, -1):
+                        nav_line = lines[j].strip()
+                        if nav_line == "":
+                            continue
+                        # 解析导航链接
+                        # 格式: "前一条：[描述](filename.md) | 下一条：[描述](filename.md)"
+                        if "前一条：" in nav_line or "下一条：" in nav_line:
+                            # 提取 "下一条" 链接
+                            next_match = re.search(r'下一条：\[.*?\]\(([^)]+\.md)\)', nav_line)
+                            if next_match:
+                                next_file = next_match.group(1)
+                                next_rid = Path(next_file).stem.rsplit('_', 1)[-1] if '_' in Path(next_file).stem else Path(next_file).stem
+                                if next_rid in record_map:
+                                    next_links[rid] = next_rid
+                                    prev_links[next_rid] = rid
+                            
+                            # 提取 "前一条" 链接
+                            prev_match = re.search(r'前一条：\[.*?\]\(([^)]+\.md)\)', nav_line)
+                            if prev_match:
+                                prev_file = prev_match.group(1)
+                                prev_rid = Path(prev_file).stem.rsplit('_', 1)[-1] if '_' in Path(prev_file).stem else Path(prev_file).stem
+                                if prev_rid in record_map:
+                                    prev_links[rid] = prev_rid
+                                    next_links[prev_rid] = rid
+                        break
+                    break
+        except Exception as e:
+            print(f"  解析文件导航链接失败: {info['file_path'].name} -> {e}")
+            continue
+    
+    # 找到链的尾部：没有 "下一条" 链接的记录
+    tail_records = []
+    for rid in record_map:
+        if rid not in next_links:
+            tail_records.append(rid)
+    
+    if not tail_records:
+        # 所有记录都有下一条，可能形成环，选择最新的记录（按文件名排序）
+        sorted_records = sorted(record_map.values(), key=lambda x: x["file_name"], reverse=True)
+        if sorted_records:
+            tail_info = sorted_records[0]
+            print(f"  找到链尾部记录(最新): {tail_info['file_name']}")
+            return _build_tail_info(tail_info, record_map)
+        return None
+    
+    if len(tail_records) == 1:
+        tail_rid = tail_records[0]
+        tail_info = record_map[tail_rid]
+        print(f"  找到链尾部记录: {tail_info['file_name']}")
+        return _build_tail_info(tail_info, record_map)
+    
+    # 多个尾部记录，选择文件名最新的
+    sorted_tails = sorted([record_map[rid] for rid in tail_records], key=lambda x: x["file_name"], reverse=True)
+    tail_info = sorted_tails[0]
+    print(f"  找到多个链尾部，选择最新: {tail_info['file_name']}")
+    return _build_tail_info(tail_info, record_map)
+
+
+def _build_tail_info(tail_info: dict, record_map: dict) -> dict:
+    """构建尾部记录的完整信息，包括文本预览"""
+    try:
+        content = tail_info["file_path"].read_text(encoding="utf-8")
+        lines = content.split("\n")
+        
+        # 提取正文内容（在 ## 正文 和 --------- 之间）
+        body_start = -1
+        body_end = -1
+        for i, line in enumerate(lines):
+            if line == "## 正文":
+                body_start = i + 1
+            elif body_start > 0 and line == "---------":
+                body_end = i
+                break
+        
+        text_preview = "(无正文)"
+        if body_start > 0 and body_end > body_start:
+            body_lines = lines[body_start:body_end]
+            body_text = "\n".join(line for line in body_lines if line.strip()).strip()
+            if body_text:
+                text_preview = body_text[:30] + "..." if len(body_text) > 30 else body_text
+                text_preview = text_preview.replace('\n', ' ').replace('\r', ' ')
+        
+        return {
+            "record_id": tail_info["record_id"],
+            "author": tail_info["author"],
+            "publish_time": tail_info["timestamp"],
+            "file_name": tail_info["file_name"],
+            "text_preview": text_preview,
+        }
+    except Exception as e:
+        print(f"  读取尾部记录内容失败: {e}")
+        return {
+            "record_id": tail_info["record_id"],
+            "author": tail_info["author"],
+            "publish_time": tail_info["timestamp"],
+            "file_name": tail_info["file_name"],
+            "text_preview": "(无正文)",
+        }
+
+
+def update_index_md(tail_record_info: dict):
+    """
+    创建/更新 index.md 入口主页，链接指向最新的链尾部记录。
+    文件位置在 python 脚本同一级目录。
+    """
+    try:
+        # index.md 位于脚本同一级目录
+        index_path = BASE_DIR / "index.md"
+        
+        # 构建链接文本：作者 + 时间 + 内容预览
+        author = tail_record_info.get("author", "未知作者")
+        publish_time = tail_record_info.get("publish_time", "")
+        text_preview = tail_record_info.get("text_preview", "")
+        file_name = tail_record_info.get("file_name", "")
+        
+        # 格式化发布时间
+        time_display = publish_time.replace('_', ' ') if publish_time else ""
+        
+        # 构建链接描述
+        link_text = f"{author} {time_display} {text_preview}".strip()
+        if len(link_text) > 50:
+            link_text = link_text[:50] + "..."
+        
+        # 构建链接路径：指向 output 目录下的文件
+        file_path = f"output/{file_name}"
+        
+        # 创建 index.md 内容
+        # 格式：前一条：[描述](output/filename.md)
+        index_content = f"前一条：[{link_text}]({file_path})\n"
+        
+        # 写入文件
+        index_path.write_text(index_content, encoding='utf-8')
+        print(f"  ✓ 已更新 index.md: {link_text}")
+        
+    except Exception as e:
+        print(f"  ⚠️ 更新 index.md 失败: {e}")
+
 
 def sanitize_name(value: str) -> str:
     """清理文件名中的非法字符"""
@@ -896,11 +1102,17 @@ async def scroll_and_extract(
     downloaded_count = 0
     batch_count = 0
     effective_batch_size = batch_size if batch_size and batch_size > 0 else 1
-    prev_record_info: dict | None = None  # 用于存储前一条记录的信息
     
     # 加载已存在的记录
     if skip_existing:
         load_existing_records()
+    
+    # 使用记录链的尾部作为前一条记录，保持链的连续性
+    global _record_chain_info
+    prev_record_info: dict | None = _record_chain_info if _record_chain_info else None
+    
+    if prev_record_info:
+        print(f"\n将从链尾部记录继续链接: {prev_record_info['file_name']}")
     
     print(f"开始滚动提取并分批下载，目标下载数: {max_download}，batch_size: {effective_batch_size}")
 
@@ -1429,9 +1641,10 @@ async def scroll_and_extract(
             
             seen_keys.add(record["dedupe_key"])
             
-            # 检查是否已存在
+            # 检查是否已存在（通过检查 markdown 文件是否存在）
             if skip_existing and record["record_id"] in _existing_record_ids:
                 print(f"  跳过已存在记录: {record['record_id']}")
+                # 注意：这里直接跳过，不加入 pending_records，所以不会更新链接
                 continue
             
             if (downloaded_count + len(pending_records)) >= max_download:
@@ -1469,16 +1682,24 @@ async def scroll_and_extract(
 
 
 def load_existing_records():
-    """加载已存在的记录ID"""
-    global _existing_record_ids, _existing_article_ids, _existing_article_md_map
+    """加载已存在的记录ID，同时扫描记录链找到尾部记录"""
+    global _existing_record_ids, _existing_article_ids, _existing_article_md_map, _record_chain_info
     
     if not OUTPUT_DIR.exists():
         return
     
-    # 加载微博记录
-    for record_dir in PICTURES_DIR.glob("*"):
-        if record_dir.is_dir():
-            _existing_record_ids.add(record_dir.name)
+    # 加载微博记录（通过检查 markdown 文件是否存在来判断）
+    # 文件名格式: author_date_time_recordid.md (如: 爱可可-爱生活_2026-04-12_0832_QApYcsCLc.md)
+    for md_file in OUTPUT_DIR.glob("*.md"):
+        # 从文件名提取 record_id: 最后一部分是 record_id
+        parts = md_file.stem.rsplit('_', 1)
+        if len(parts) == 2:
+            # parts[1] 应该是 record_id (如 QApYcsCLc)
+            # 验证 record_id 是否符合微博ID格式（字母数字组合，通常8位左右）
+            record_id = parts[1]
+            if record_id and len(record_id) >= 6:
+                _existing_record_ids.add(record_id)
+                print(f"    已加载记录: {record_id} ({md_file.name})")
     
     # 加载文章记录
     for md_file in ARTICLES_DIR.glob("*.md"):
@@ -1487,6 +1708,14 @@ def load_existing_records():
         _existing_article_md_map[article_id] = md_file
     
     print(f"已加载 {_existing_record_ids.__len__()} 条微博记录，{_existing_article_ids.__len__()} 篇文章")
+    
+    # 扫描记录链，找到尾部记录
+    print("扫描记录链，查找尾部记录...")
+    _record_chain_info = find_record_chain_tail()
+    if _record_chain_info:
+        print(f"  将从尾部记录继续链接: {_record_chain_info['file_name']}")
+        # 创建/更新 index.md 入口主页，链接指向最新的链尾部记录
+        update_index_md(_record_chain_info)
 
 
 async def download_record(

@@ -11,6 +11,7 @@
 - 微博新支持的markdown展现的长文章
 - **Markdown 双向链接** - 在保存的 Markdown 文件中添加"前一条"和"下一条"导航链接，方便浏览
 
+请正确使用本技能，用于微博收藏、个人数据备份或者关注博主的内容备份保存。不能用于大规模的商业数据采集。
 ## 前置要求
 
 1. **Python 环境**：需要 Python 3.8+
@@ -23,9 +24,9 @@
 ## 通过Agent Skill 运行
 
 - 自动安装Skill (推荐)
-  npx skills add https://www.modelscope.cn/skills/hhjinhh/weibo-downloader
+  npx skills add https://www.modelscope.cn/skills/hhjinhh/weibo-data-backup
 - 手动安装Skill
-  把项目clone到本地, 把weibo-downloader 目录复制到agent skills目录下， 如 .opencode/skills 或 .claude/skills/目录下
+  把项目clone到本地, 把weibo-data-backup 目录复制到agent skills目录下， 如 .opencode/skills 或 .claude/skills/目录下
 
 ## 手动运行脚本
 
