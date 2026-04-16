@@ -1,15 +1,16 @@
-# Weibo  Downloader
-
+ 
 使用 Playwright 自动化下载微博收藏，本人或其他博主微博内容的工具， 以Markdown格式保存。
 
-# 功能特性
+--------
+
+## 功能特性
 - 支持下载微博收藏、本人微博、他人微博
 - 图片（支持九宫格排列，支持多种尺寸：360px、480px、690px、2000px、原图 large）
 - 视频（可选下载， 默认最高质量）
 - 长文章（可选下载）
 - **Markdown 双向链接** - 在保存的 Markdown 文件中添加"前一条"和"下一条"导航链接，方便浏览
 
-# 前置要求
+## 前置要求
 
 1. **Python 环境**：需要 Python 3.8+
 2. **依赖安装**：
@@ -17,12 +18,12 @@
    pip install playwright
    playwright install chromium
    ```
-# 通过 Skill 运行 (推荐)
+## 通过 Skill 运行 (推荐)
  把项目clone到本地, 把weibo-downloader 目录复制到agent skills目录下， 如 .opencode/skills 或 .claude/skills/目录下
 
-# 使用方法 -- 手动运行脚本 
+## 使用方法 -- 手动运行脚本 
 
-## 首次使用（下载10条记录，360px图片， 不下载视频，  可以快速得到预览结果）
+### 首次使用（下载10条记录，360px图片， 不下载视频，  可以快速得到预览结果）
 
 1. 运行脚本，会自动打开浏览器
 2. 在 60 秒内完成微博登录，并进入需要下载的页面（收藏页/本人主页/他人主页）
@@ -32,7 +33,7 @@
 python weibo_favorites_4skill.py
 ```
 
-## 日常使用（推荐配置，推荐给用户后续的日常使用，headless 模式，下载600条记录包括高清图片，视频，长文章， 跳过已存在的记录）
+### 日常使用（推荐配置，推荐给用户后续的日常使用，headless 模式，下载600条记录包括高清图片，视频，长文章， 跳过已存在的记录）
 
 ```bash
 python weibo_favorites_4skill.py \
@@ -44,7 +45,7 @@ python weibo_favorites_4skill.py \
   --headless
 ```
 
-## 指定输出目录
+### 指定输出目录
 
 ```bash
 python weibo_favorites_4skill.py \
@@ -52,7 +53,7 @@ python weibo_favorites_4skill.py \
   --max-download 100
 ```
 
-# 参数说明
+## 参数说明
 
 | 参数                   | 说明                             | 默认值                                  |
 | ---------------------- | -------------------------------- | --------------------------------------- |
@@ -67,42 +68,42 @@ python weibo_favorites_4skill.py \
 | `--user-data-dir`    | 浏览器用户数据目录                 | 无此参数默认使用 cookies.json             |
 | `--output-dir`       | 自定义输出目录                    | python脚本所在目录下的output目录           |
 
-# 输出目录结构
+## 输出目录结构
 
 ```
 output/
-├── pictures/          # 图片目录
-│   └── {record_id}/   # 每条微博的图片
-├── videos/            # 视频目录
-├── articles/          # 长文章目录
-│   └── pictures/      # 文章中的图片
-└── {author}_{date}_{id}.md  # 微博内容Markdown文件
+├── pictures/          ## 图片目录
+│   └── {record_id}/   ## 每条微博的图片
+├── videos/            ## 视频目录
+├── articles/          ## 长文章目录
+│   └── pictures/      ## 文章中的图片
+└── {author}_{date}_{id}.md  ## 微博内容Markdown文件
 ```
 
-## Markdown 文件格式示例
+### Markdown 文件格式示例
 
 ```markdown
-# 作者名  发布时间 : 
+## 作者名  发布时间 : 
 
 前一条：[前一条微博描述](作者名_2024-01-15_xxxx.md) | 下一条：[下一条微博描述](作者名_2024-01-15_yyyy.md)
 
-# 正文
+## 正文
 
 微博正文内容...
 
-# 图片
+## 图片
 
 ![图片1](pictures/record_id/group1_1.jpg)
 ![图片2](pictures/record_id/group1_2.jpg)
 
-# 视频
+## 视频
 
 [视频文件](videos/record_id.mp4)
 
  
 ```
 
-## 双向链接功能
+### 双向链接功能
 
 每个保存的 Markdown 文件都包含双向导航链接：
 
@@ -119,26 +120,26 @@ output/
 - 最后一条微博只有"前一条"链接
 - 中间微博同时包含"前一条"和"下一条"链接
 
-# 故障排除
+## 故障排除
 
-## 登录问题
+### 登录问题
 
 - 检查网络连接
 - 尝试删除 cookies.json 或 browser_data 目录重新登录
 - 确保没有开启 VPN 或代理导致访问异常
 
-## 下载失败
+### 下载失败
 
 - 检查磁盘空间
 - 检查目录权限
 - 尝试降低 `--max-download` 数量
 
-## 浏览器启动失败
+### 浏览器启动失败
 
 - 确保已运行 `playwright install chromium`
 - 检查系统是否支持 Chromium 运行
 
-## 内容展开问题
+### 内容展开问题
 
 - 程序会自动点击"展开"按钮获取完整内容
 - 如果仍有内容被截断，可能是微博平台的限制
