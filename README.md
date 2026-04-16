@@ -18,10 +18,10 @@
    pip install playwright
    playwright install chromium
    ```
-## 通过 Skill 运行 (推荐)
+## 通过Agent Skill 运行 (推荐)
  把项目clone到本地, 把weibo-downloader 目录复制到agent skills目录下， 如 .opencode/skills 或 .claude/skills/目录下
 
-## 使用方法 -- 手动运行脚本 
+## 手动运行脚本 
 
 ### 首次使用（下载10条记录，360px图片， 不下载视频，  可以快速得到预览结果）
 
@@ -34,7 +34,7 @@ python weibo_favorites_4skill.py
 ```
 
 ### 日常使用（推荐配置，推荐给用户后续的日常使用，headless 模式，下载600条记录包括高清图片，视频，长文章， 跳过已存在的记录）
-
+首次使用后，后续运行时不用登录微博，直接从第一次运行生成的cookies.json文件中读取登录状态。
 ```bash
 python weibo_favorites_4skill.py \
   --image-size large \
@@ -102,23 +102,7 @@ output/
 
  
 ```
-
-### 双向链接功能
-
-每个保存的 Markdown 文件都包含双向导航链接：
-
-- **前一条**：链接到按文件名排序的上一条微博
-- **下一条**：链接到按文件名排序的下一条微博
-
-链接格式：
-
-```markdown
-前一条：[微博描述](文件名.md) | 下一条：[微博描述](文件名.md)
-```
-
-- 第一条微博只有"下一条"链接
-- 最后一条微博只有"前一条"链接
-- 中间微博同时包含"前一条"和"下一条"链接
+ 
 
 ## 故障排除
 

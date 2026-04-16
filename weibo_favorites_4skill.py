@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+import aiohttp
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 
 """
@@ -303,29 +304,43 @@ async def download_video_with_context(
     video_url: str,
     target_path: Path,
     user_agent: str = "",
+    timeout_ms: int = 300000,  # 默认5分钟超时，大视频需要更长时间
 ) -> bool:
     """
-    使用 Playwright 的浏览器上下文下载视频。
+    使用流式下载方式下载视频，避免大文件内存问题。
     """
     try:
+        # 从浏览器获取 cookies
+        cookies = await context.cookies()
+        cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+        
         # 构建请求头（微博视频需要 Referer）
         headers = {
             "Referer": "https://weibo.com/",
+            "Cookie": cookie_str,
         }
         
         if user_agent:
             headers["User-Agent"] = user_agent
         
-        response = await context.request.get(video_url, headers=headers)
-        
-        if not response.ok:
-            print(f"视频下载失败（HTTP {response.status}）: {video_url}")
-            return False
-        
-        data = await response.body()
-        target_path.write_bytes(data)
-        print(f"✓ 视频下载成功: {target_path.name} ({len(data) / 1024 / 1024:.1f}MB)")
-        return True
+        # 使用 aiohttp 进行流式下载，避免大文件内存问题
+        timeout = aiohttp.ClientTimeout(total=timeout_ms / 1000)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(video_url, headers=headers) as response:
+                if response.status != 200:
+                    print(f"视频下载失败（HTTP {response.status}）: {video_url}")
+                    return False
+                
+                # 流式写入文件
+                downloaded_size = 0
+                with open(target_path, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                
+                print(f"✓ 视频下载成功: {target_path.name} ({downloaded_size / 1024 / 1024:.1f}MB)")
+                return True
     except Exception as e:
         print(f"视频下载失败: {video_url} -> {e}")
         return False
@@ -341,8 +356,15 @@ async def extract_real_video_url(page: Page, video_page_url: str) -> dict | None
     
     best_source = None
     try:
-        await video_page.goto(video_page_url, wait_until="networkidle", timeout=30000)
-        await asyncio.sleep(2)
+        # 使用 domcontentloaded 而不是 networkidle，避免视频页面加载超时
+        # 视频页面有很多媒体资源，networkidle 可能会超时
+        try:
+            await video_page.goto(video_page_url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            print(f"  页面加载警告（可忽略）: {str(e)[:100]}")
+        
+        # 等待视频元素或脚本加载
+        await asyncio.sleep(3)
         
         # 提取所有视频源及其分辨率信息
         script = """() => {
@@ -786,19 +808,68 @@ async def scroll_and_extract(
                     }
                 }
                 
-                // 提取视频URL
+                // 提取视频URL - 增强版，支持多种微博视频格式
                 const videoUrls = [];
+                
+                // 方法1: 直接从 video 元素提取
                 const videoElements = article.querySelectorAll('video');
                 videoElements.forEach(video => {
                     const src = video.getAttribute('src') || video.currentSrc || '';
                     if (src) videoUrls.push(toAbs(src));
+                    // 也检查 source 子元素
+                    video.querySelectorAll('source').forEach(source => {
+                        const sourceSrc = source.getAttribute('src');
+                        if (sourceSrc) videoUrls.push(toAbs(sourceSrc));
+                    });
                 });
                 
+                // 方法2: 从视频链接提取
                 const videoLinks = article.querySelectorAll('a[href*="video"], a[href*="play"]');
                 videoLinks.forEach(link => {
                     const href = toAbs(link.getAttribute('href'));
                     if (href && !videoUrls.includes(href)) {
                         videoUrls.push(href);
+                    }
+                });
+                
+                // 方法3: 从 data-url 属性提取（微博常用）
+                article.querySelectorAll('[data-url*="video"], [data-url*=".mp4"]').forEach(el => {
+                    const url = el.getAttribute('data-url');
+                    if (url && !videoUrls.includes(url)) {
+                        videoUrls.push(toAbs(url));
+                    }
+                });
+                
+                // 方法4: 从背景视频样式提取
+                article.querySelectorAll('[style*="video"]').forEach(el => {
+                    const style = el.getAttribute('style') || '';
+                    const match = style.match(/url\(["']?(https?:\/\/[^"')]+\.(?:mp4|m3u8))["']?\)/);
+                    if (match && !videoUrls.includes(match[1])) {
+                        videoUrls.push(match[1]);
+                    }
+                });
+                
+                // 方法5: 从 action-data 属性提取（微博视频卡片）
+                article.querySelectorAll('[action-data*="video"]').forEach(el => {
+                    const actionData = el.getAttribute('action-data') || '';
+                    // 提取视频URL
+                    const urlMatch = actionData.match(/(https?:\/\/[^\s&]+\.(?:mp4|m3u8))/);
+                    if (urlMatch && !videoUrls.includes(urlMatch[1])) {
+                        videoUrls.push(urlMatch[1]);
+                    }
+                    // 提取视频播放页链接
+                    const videoPageMatch = actionData.match(/(https?:\/\/[^\s&]*video[^\s&]*)/);
+                    if (videoPageMatch && !videoUrls.includes(videoPageMatch[1])) {
+                        videoUrls.push(videoPageMatch[1]);
+                    }
+                });
+                
+                // 方法6: 从 script 标签附近的视频容器提取
+                article.querySelectorAll('div[onclick*="video"], div[onclick*="play"]').forEach(el => {
+                    const onclick = el.getAttribute('onclick') || '';
+                    const urlMatch = onclick.match(/(https?:\/\/[^'"\s]+)/);
+                    if (urlMatch && !videoUrls.includes(urlMatch[1])) {
+                        videoUrls.push(urlMatch[1]);
                     }
                 });
                 
@@ -1002,6 +1073,12 @@ async def scroll_and_extract(
         else:
             idle_rounds = 0
         
+        # 检查是否已经达到目标下载数量（包括待下载的）
+        total_extracted = downloaded_count + len(pending_records)
+        if total_extracted >= max_download:
+            print(f"\n✓ 已达到目标下载数量: {total_extracted}/{max_download}，停止滚动")
+            break
+        
         # 滚动页面
         if downloaded_count < max_download and idle_rounds < max_idle_rounds:
             await page.evaluate(f"window.scrollBy(0, window.innerHeight * {scroll_step_ratio})")
@@ -1123,13 +1200,23 @@ async def download_record(
                     text_content = '\n'.join(remaining_lines).strip() if remaining_lines else "(无正文)"
                     print(f"补充修正发布时间: {author} @ {publish_time}")
     
-    # 创建记录目录
-    record_dir = PICTURES_DIR / record_id
-    record_dir.mkdir(parents=True, exist_ok=True)
-    
     context = page.context
     
-    # 下载图片
+    # 格式化发布时间用于文件名（提前到这里，供图片、视频下载使用）
+    if publish_time:
+        publish_time_formatted = publish_time.replace(' ', '_').replace(':', '')
+        # 处理不同的时间格式
+        if re.match(r'^\d{2}-\d{2}$', publish_time_formatted):
+            publish_time_formatted = f"26-{publish_time_formatted}"
+        elif re.match(r'^\d{2}-\d{2}-\d{2}$', publish_time_formatted):
+            pass
+    else:
+        publish_time_formatted = datetime.now().strftime("%y-%m-%d_%H%M")
+    
+    author_name = sanitize_name(author)
+    file_prefix = f"{author_name}_{publish_time_formatted}_{record_id}"
+    
+    # 下载图片（使用与markdown一致的命名）
     local_image_groups = []
     if record["image_groups"]:
         print(f"\n下载图片: {record_id}")
@@ -1139,13 +1226,14 @@ async def download_record(
                 # 转换图片尺寸
                 img_url = convert_image_size(img["url"], image_size)
                 ext = image_extension(img_url)
-                img_name = f"group{group_idx + 1}_{img_idx + 1}{ext}"
-                img_path = record_dir / img_name
+                # 使用与markdown一致的命名: author_timestamp_recordid_img_序号.扩展名
+                img_name = f"{file_prefix}_img_{group_idx + 1}_{img_idx + 1}{ext}"
+                img_path = PICTURES_DIR / img_name
                 
                 if img_path.exists():
                     print(f"  跳过已存在: {img_name}")
                     local_group.append({
-                        "path": f"pictures/{record_id}/{img_name}",
+                        "path": f"pictures/{img_name}",
                         "width": img.get("width", 300),
                         "height": img.get("height", 300)
                     })
@@ -1155,7 +1243,7 @@ async def download_record(
                 if success:
                     print(f"  ✓ {img_name}")
                     local_group.append({
-                        "path": f"pictures/{record_id}/{img_name}",
+                        "path": f"pictures/{img_name}",
                         "width": img.get("width", 300),
                         "height": img.get("height", 300)
                     })
@@ -1169,76 +1257,110 @@ async def download_record(
             if local_group:
                 local_image_groups.append(local_group)
     
-    # 下载视频
+    # 下载视频（只下载最高分辨率）
     if download_video and record["video_urls"]:
         print(f"\n下载视频: {record_id}")
+        print(f"  发现 {len(record['video_urls'])} 个视频URL")
+        
+        # 收集所有视频URL及其分辨率信息
+        all_video_sources = []
+        
         for video_url in record["video_urls"]:
-            # 如果是视频播放页面，提取真实视频URL
-            if "video" in video_url and not video_url.endswith(".mp4"):
-                video_info = await extract_real_video_url(page, video_url)
-                if video_info:
-                    video_url = video_info["url"]
+            try:
+                # 更精确的判断：只有明确的播放页面才需要提取URL
+                # 直接的 .mp4 URL 不需要提取
+                is_direct_video = video_url.endswith('.mp4') or '.mp4?' in video_url
+                is_player_page = 'video.weibo.com' in video_url and not is_direct_video
+                
+                if is_player_page:
+                    # 从播放页面提取真实的视频URL
+                    print(f"  从视频播放页面提取最高分辨率视频: {video_url[:80]}...")
+                    real_video_info = await extract_real_video_url(page, video_url)
+                    if real_video_info:
+                        print(f"  提取到视频: {real_video_info['width']}x{real_video_info['height']}")
+                        all_video_sources.append({
+                            'url': real_video_info['url'],
+                            'width': real_video_info.get('width', 0),
+                            'height': real_video_info.get('height', 0)
+                        })
+                    else:
+                        print(f"  ⚠️ 无法提取视频URL: {video_url[:80]}...")
+                else:
+                    # 已经是直接的视频URL，尝试从URL中提取分辨率信息
+                    size_match = re.search(r'(\d+)x(\d+)', video_url)
+                    # 或者从 label 参数中提取
+                    label_match = re.search(r'label=mp4_(\d+)p', video_url)
+                    height = 0
+                    if size_match:
+                        height = int(size_match.group(2))
+                    elif label_match:
+                        height = int(label_match.group(1))
+                    
+                    all_video_sources.append({
+                        'url': video_url,
+                        'width': 0,
+                        'height': height
+                    })
+            except Exception as e:
+                print(f"  处理视频URL异常: {video_url[:80]}... -> {e}")
+        
+        # 选择最高分辨率的视频（优先选择高度最大的）
+        if all_video_sources:
+            best_source = max(all_video_sources, key=lambda x: (x['height'], x['width']))
+            print(f"  共找到 {len(all_video_sources)} 个视频源，选择最高分辨率: {best_source['height']}p")
             
-            if video_url.endswith(".mp4"):
-                ext = video_extension(video_url)
-                video_name = f"{record_id}{ext}"
-                video_path = VIDEOS_DIR / video_name
-                video_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                if video_path.exists():
-                    print(f"  跳过已存在: {video_name}")
-                    continue
-                
-                await download_video_with_context(context, video_url, video_path, user_agent=user_agent)
+            # 下载视频，使用与markdown一致的命名
+            ext = video_extension(best_source['url'])
+            video_name = f"{file_prefix}_video{ext}"
+            video_path = VIDEOS_DIR / video_name
+            video_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            if video_path.exists():
+                print(f"  跳过已存在: {video_name}")
+            else:
+                print(f"  开始下载: {video_name}")
+                success = await download_video_with_context(context, best_source['url'], video_path, user_agent=user_agent)
+                if success:
+                    print(f"  ✓ 视频下载完成: {video_name}")
+                else:
+                    print(f"  ✗ 视频下载失败")
     
-    # 下载长文章
+    # 下载长文章（使用与markdown一致的命名）
     if download_article and record["long_article_url"]:
         print(f"\n提取长文章: {record_id}")
         article_data = await extract_long_article(page, record["long_article_url"])
         
         if article_data:
-            # 保存文章
-            article_id = f"{record_id}_article"
-            article_md = ARTICLES_DIR / f"{article_id}.md"
+            # 保存文章，使用与主markdown一致的命名前缀
+            article_title = sanitize_name(article_data.get('title', 'article')[:50])
+            article_file_prefix = f"{file_prefix}_article_{article_title}"
+            article_md_name = f"{article_file_prefix}.md"
+            article_md = ARTICLES_DIR / article_md_name
             article_md.parent.mkdir(parents=True, exist_ok=True)
             
             # 构建Markdown内容
             md_content = f"# {article_data.get('title', record_id)}\n\n"
-            md_content += f"作者: {article_data.get('author', record['author'])}\n\n"
-            md_content += f"时间: {article_data.get('publish_time', record['publish_time'])}\n\n"
-            md_content += f"原文链接: {record['long_article_url']}\n\n"
-            md_content += "---\n\n"
+            md_content += f"**作者**: {article_data.get('author', record['author'])}\n\n"
+            md_content += f"**时间**: {article_data.get('publish_time', record['publish_time'])}\n\n"
+            md_content += f"**原文链接**: {record['long_article_url']}\n\n"
+            md_content += "---------\n\n"
+            md_content += "## 正文\n\n"
             md_content += article_data.get('content', '')
             
             article_md.write_text(md_content, encoding='utf-8')
             print(f"  ✓ 文章已保存: {article_md.name}")
             
-            # 下载文章图片
+            # 下载文章图片（使用与文章markdown一致的命名）
             if article_data.get('images'):
-                article_pic_dir = ARTICLE_PICTURES_DIR / article_id
-                article_pic_dir.mkdir(parents=True, exist_ok=True)
-                
                 for idx, img_url in enumerate(article_data['images']):
-                    img_name = f"{idx + 1}{image_extension(img_url)}"
-                    img_path = article_pic_dir / img_name
+                    # 使用与文章markdown一致的命名: prefix_article_img_序号.扩展名
+                    img_name = f"{article_file_prefix}_img_{idx + 1:03d}{image_extension(img_url)}"
+                    img_path = ARTICLE_PICTURES_DIR / img_name
                     
                     if not img_path.exists():
                         await download_image_with_context(context, img_url, img_path, user_agent=user_agent)
     
-    # 创建 Markdown 文件
-    # 格式化发布时间用于文件名
-    if publish_time:
-        publish_time_formatted = publish_time.replace(' ', '_').replace(':', '')
-        # 处理不同的时间格式
-        if re.match(r'^\d{2}-\d{2}$', publish_time_formatted):
-            publish_time_formatted = f"26-{publish_time_formatted}"
-        elif re.match(r'^\d{2}-\d{2}-\d{2}$', publish_time_formatted):
-            pass
-    else:
-        publish_time_formatted = datetime.now().strftime("%y-%m-%d_%H%M")
-    
-    author_name = sanitize_name(author)
-    file_prefix = f"{author_name}_{publish_time_formatted}_{record_id}"
+    # 创建 Markdown 文件（file_prefix 已在前面定义）
     md_name = f"{file_prefix}.md"
     md_path = OUTPUT_DIR / md_name
     
@@ -1254,7 +1376,7 @@ async def download_record(
         "---------",
     ]
     
-    # 添加图片部分
+    # 添加图片部分（仅当有图片时）
     if local_image_groups:
         lines.append("## 图片")
         lines.append("")
@@ -1265,10 +1387,31 @@ async def download_record(
                 img_tags.append(f'<img src="{img["path"]}" width="300" height="300">')
             lines.append("".join(img_tags))
             lines.append("")
-    else:
-        lines.append("## 图片")
+    
+    # 添加视频链接（使用新的命名格式）
+    video_files = []
+    if download_video and record.get("video_urls"):
+        # 检查视频目录中是否存在对应的视频文件（使用新的命名格式）
+        ext = ".mp4"  # 默认扩展名
+        video_name = f"{file_prefix}_video{ext}"
+        video_path = VIDEOS_DIR / video_name
+        if video_path.exists():
+            video_files.append({"name": video_name, "path": f"videos/{video_name}"})
+    
+    if video_files:
         lines.append("")
-        lines.append("(无图片)")
+        lines.append("---------")
+        lines.append("## 视频")
+        lines.append("")
+        for video in video_files:
+            lines.append(f"**视频文件**: [{video['name']}]({video['path']})")
+            lines.append("")
+            # 添加HTML5视频播放器
+            lines.append(f'<video controls width="100%" style="max-width: 600px;">')
+            lines.append(f'  <source src="{video["path"]}" type="video/mp4">')
+            lines.append(f'  您的浏览器不支持视频播放')
+            lines.append(f'</video>')
+            lines.append("")
     
     # 添加长文章链接
     if record.get("long_article_url"):
