@@ -1,13 +1,14 @@
- 
 使用 Playwright 自动化下载微博收藏，本人或其他博主微博内容的工具， 以Markdown格式保存。
 
---------
+---
 
 ## 功能特性
+
 - 支持下载微博收藏、本人微博、他人微博
 - 图片（支持九宫格排列，支持多种尺寸：360px、480px、690px、2000px、原图 large）
 - 视频（可选下载， 默认最高质量）
 - 长文章（可选下载）
+- 微博新支持的markdown展现的长文章
 - **Markdown 双向链接** - 在保存的 Markdown 文件中添加"前一条"和"下一条"导航链接，方便浏览
 
 ## 前置要求
@@ -18,14 +19,15 @@
    pip install playwright
    playwright install chromium
    ```
-## 通过Agent Skill 运行 
-- 自动安装Skill (推荐)
-npx skills add https://www.modelscope.cn/skills/hhjinhh/weibo-downloader
 
-- 手动安装Skill 
+## 通过Agent Skill 运行
+
+- 自动安装Skill (推荐)
+  npx skills add https://www.modelscope.cn/skills/hhjinhh/weibo-downloader
+- 手动安装Skill
   把项目clone到本地, 把weibo-downloader 目录复制到agent skills目录下， 如 .opencode/skills 或 .claude/skills/目录下
 
-## 手动运行脚本 
+## 手动运行脚本
 
 ### 首次使用（下载10条记录，360px图片， 不下载视频，  可以快速得到预览结果）
 
@@ -36,10 +38,13 @@ npx skills add https://www.modelscope.cn/skills/hhjinhh/weibo-downloader
 ```bash
 python weibo_favorites_4skill.py
 ```
+
 注： 不提供output-dir参数，默认输出到python脚本所在目录下的output目录。
 
 ### 日常使用（推荐配置，推荐给用户后续的日常使用，headless 模式，下载600条记录包括高清图片，视频，长文章， 跳过已存在的记录）
+
 首次使用后，后续运行时不用登录微博，直接从第一次运行生成的cookies.json文件中读取登录状态。
+
 ```bash
 python weibo_favorites_4skill.py \
   --image-size large \
@@ -107,7 +112,6 @@ output/
 
  
 ```
- 
 
 ## 故障排除
 

@@ -986,6 +986,21 @@ async def scroll_and_extract(
             // 等待所有展开动画完成
             await sleep(300);
             
+            // 处理 Markdown 开关：如果存在 "Markdown: 开"，点击关闭以获取原始 Markdown 文本
+            for (const article of articles) {
+                const allElements = article.querySelectorAll('*');
+                for (const el of allElements) {
+                    if (el.childNodes.length === 1 && el.childNodes[0].nodeType === 3) {
+                        const text = el.textContent.trim();
+                        if (text === 'Markdown: 开') {
+                            el.click();
+                            await sleep(800); // 等待切换动画
+                            break;
+                        }
+                    }
+                }
+            }
+            
             const rawRecords = articles.map((article, idx) => {
                 const statusLink = [...article.querySelectorAll('a[href*="/status/"]')]
                     .map(a => toAbs(a.getAttribute('href')))
