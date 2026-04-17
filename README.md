@@ -1,3 +1,5 @@
+**[English](README.en.md) | [中文](README.md)**
+
 使用 Playwright 自动化下载微博收藏，本人或其他博主微博内容的工具， 以Markdown格式保存。
 
 ---
