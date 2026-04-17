@@ -1678,6 +1678,12 @@ async def scroll_and_extract(
     await flush_pending(force=True)
 
     print(f"\n提取并下载完成，共下载 {downloaded_count} 条记录")
+    
+    # 如果有下载新记录，更新 index.md 指向最新的链尾部
+    if downloaded_count > 0 and prev_record_info:
+        print(f"\n更新 index.md 指向最新记录: {prev_record_info['file_name']}")
+        update_index_md(prev_record_info)
+    
     return downloaded_count
 
 
@@ -1699,7 +1705,7 @@ def load_existing_records():
             record_id = parts[1]
             if record_id and len(record_id) >= 6:
                 _existing_record_ids.add(record_id)
-                print(f"    已加载记录: {record_id} ({md_file.name})")
+                #print(f"    已加载记录: {record_id} ({md_file.name})")
     
     # 加载文章记录
     for md_file in ARTICLES_DIR.glob("*.md"):
