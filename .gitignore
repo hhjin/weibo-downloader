@@ -10,13 +10,14 @@ venv/
 pip-log.txt
 pip-delete-this-directory.txt
 
+
 # Output directories
 output/
 output_me/
 output*/
 browser_data/
 *.log
-
+wiki
 # IDE
 .idea/
 .vscode/

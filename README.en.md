@@ -1,3 +1,6 @@
+**[English](README.en.md) | [中文](README.md)**
+---------
+
 Use Playwright to automatically download Weibo favorites, personal or other bloggers' Weibo content, saved in Markdown format.
 
 ---
@@ -68,7 +71,7 @@ python weibo_favorites_4skill.py \
 ## Parameter Description
 
 | Parameter | Description | Default |
-| ------------------ - | ------------------------------ | --------------------------------------- |
+| -------------------  | ------------------------------ | --------------------------------------- |
 | `--url` | Target Weibo user profile or favorites page URL | https://weibo.com |
 | `--max-download` | Maximum download quantity | 10 |
 | `--skip-existing` | Skip existing records | False |
