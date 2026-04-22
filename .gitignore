@@ -9,8 +9,8 @@ venv/
 .venv/
 pip-log.txt
 pip-delete-this-directory.txt
-
-
+**/*_consoleLogs.md
+Weibo-Favorites/
 # Output directories
 output/
 output_me/

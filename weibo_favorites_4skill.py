@@ -240,11 +240,11 @@ def _build_tail_info(tail_info: dict, record_map: dict) -> dict:
 def update_index_md(tail_record_info: dict):
     """
     创建/更新 index.md 入口主页，链接指向最新的链尾部记录。
-    文件位置在 python 脚本同一级目录。
+    文件位置在输出目录的同级目录。
     """
     try:
-        # index.md 位于脚本同一级目录
-        index_path = BASE_DIR / "index.md"
+        # index.md 位于输出目录的同级目录
+        index_path = OUTPUT_DIR.parent / "index.md"
         
         # 构建链接文本：作者 + 时间 + 内容预览
         author = tail_record_info.get("author", "未知作者")
@@ -261,7 +261,7 @@ def update_index_md(tail_record_info: dict):
             link_text = link_text[:50] + "..."
         
         # 构建链接路径：指向 output 目录下的文件
-        file_path = f"output/{file_name}"
+        file_path = f"{OUTPUT_DIR.name}/{file_name}"
         
         # 创建 index.md 内容
         # 格式：前一条：[描述](output/filename.md)
